@@ -6,6 +6,7 @@ import os
 import time
 import uuid
 import threading
+import re
 
 from cluster import Cluster
 
@@ -54,14 +55,14 @@ class Ceph(Cluster):
         # Create the filesystems
         self.setup_fs()
 
-        # Build the cluster
-        monitoring.start('%s/creation' % self.monitoring_dir)
+        # Build the cluster        
+        monitoring.start('%s/creation' % self.monitoring_dir, self)
         self.make_mons()
         self.make_osds()
         monitoring.stop()
 
         # Check Health
-        monitoring.start('%s/initial_health_check' % self.monitoring_dir)
+        monitoring.start('%s/initial_health_check' % self.monitoring_dir, self)
         self.check_health()
         monitoring.stop()
 
@@ -73,7 +74,7 @@ class Ceph(Cluster):
 
         # Peform Idle Monitoring
         if self.idle_duration > 0:
-            monitoring.start("%s/idle_monitoring" % self.monitoring_dir)
+            monitoring.start("%s/idle_monitoring" % self.monitoring_dir, self)
             time.sleep(self.idle_duration)
             monitoring.stop()
 
@@ -122,6 +123,17 @@ class Ceph(Cluster):
             common.pdsh(osds, 'sudo mkfs.%s %s %s' % (fs, mkfs_opts, device))
             common.pdsh(osds, 'sudo mount %s -t %s %s %s/osd-device-%s-data' % (mount_opts, fs, device, self.mnt_dir, device_id))
 
+    def get_osd_device_by_host(self, osd):
+        sc = settings.cluster
+        osds_specified = False
+        devices = sc.get(osd)
+        print "["+osd+"]:"+",".join(devices)
+        if not devices:
+            device = 0
+            for device in xrange (0,sc.get('osds_per_node')):
+                devices.append("/dev/disk/by-partlabel/osd-device-"+str(device)+"-data")
+        return devices
+
     def setup_fs(self):
         sc = settings.cluster
         fs = sc.get('fs')
@@ -130,26 +142,13 @@ class Ceph(Cluster):
              shutdown("No OSD filesystem specified.  Exiting.")
 
         osds = settings.getnodes('osds')
-        osds_mkfsed = False
         user = sc.get('user')
+        device_id = 0
         for osd in sc.get('osds'):
-            device_id = 0
-            devices = sc.get(osd)
-            print "["+osd+"]:"+",".join(devices)
-            if not devices:
-                if not osds_mkfsed:
-                    break;
-                else:
-                    print "[ERROR] missing osd devices of "+osd
-                    sys.exit()
+            devices = self.get_osd_device_by_host(osd)            
             for device in devices:
                 self.make_fs( user+'@'+osd, device, device_id )
-                osds_mkfsed = True
                 device_id = device_id + 1
-       
-        if not osds_mkfsed: 
-            for device in xrange (0,sc.get('osds_per_node')):
-                self.make_fs( osds, "/dev/disk/by-partlabel/osd-device-"+str(device)+"-data", device )
  
     def distribute_conf(self):
         nodes = settings.getnodes('head', 'clients', 'osds', 'mons', 'rgws')
@@ -241,7 +240,7 @@ class Ceph(Cluster):
         ret = 0
 
         while True:
-            stdout, stderr = common.pdsh(settings.getnodes('head'), 'ceph -c %s health %s' % (self.tmp_conf, logline))
+            stdout, stderr = common.pdsh(settings.getnodes('head'), 'ceph -c %s health %s' % (self.tmp_conf, logline), True)
             if "HEALTH_OK" in stdout:
                 break
             else:
@@ -253,7 +252,7 @@ class Ceph(Cluster):
     def check_scrub(self):
         print 'Waiting until Scrubbing completes...'
         while True:
-            stdout, stderr = common.pdsh(settings.getnodes('head'), 'ceph -c %s pg dump | cut -f 16 | grep "0.000000" | wc -l' % self.tmp_conf)
+            stdout, stderr = common.pdsh(settings.getnodes('head'), 'ceph -c %s pg dump | cut -f 16 | grep "0.000000" | wc -l' % self.tmp_conf, True)
             if " 0\n" in stdout:
                 break
             else:
@@ -261,13 +260,20 @@ class Ceph(Cluster):
             time.sleep(1)
 
     def dump_config(self, run_dir):
-        common.pdsh(settings.getnodes('osds'), 'sudo ceph -c %s --admin-daemon /var/run/ceph/ceph-osd.0.asok config show > %s/ceph_settings.out' % (self.tmp_conf, run_dir))
+        print "Dump config to %s/ceph_settings.out" % run_dir
+        common.pdsh(settings.getnodes('osds'), 'daemon=`ls /var/run/ceph/ceph-osd.*.asok | head -1`; sudo ceph -c %s --admin-daemon ${daemon} config show > %s/ceph_settings.out' % (self.tmp_conf, run_dir))
 
     def dump_historic_ops(self, run_dir):
+        print "Dump config to %s/historic_ops.out" % run_dir
         common.pdsh(settings.getnodes('osds'), 'find /var/run/ceph/*.asok -maxdepth 1 -exec sudo ceph --admin-daemon {} dump_historic_ops \; > %s/historic_ops.out' % run_dir)
 
     def set_osd_param(self, param, value):
-        common.pdsh(settings.getnodes('osds'), 'find /dev/disk/by-partlabel/osd-device-*data -exec readlink {} \; | cut -d"/" -f 3 | sed "s/[0-9]$//" | xargs -I{} sudo sh -c "echo %s > /sys/block/\'{}\'/queue/%s"' % (value, param))
+        sc = settings.cluster
+        user = sc.get('user')
+        for osd in sc.get('osds'):
+            #common.pdsh("%s@%s" % (user, osd), 'find /dev/disk/by-partlabel/osd-device-*data -exec readlink {} \; | cut -d"/" -f 3 | sed "s/[0-9]$//" | xargs -I{} sudo sh -c "echo %s > /sys/block/\'{}\'/queue/%s"' % (value, param))
+            for device in self.get_osd_device_by_host(osd):
+                common.pdsh("%s@%s" % (user, osd), 'echo %s | cut -d"/" -f 3 | sed "s/[0-9]$//" | xargs -I{} sudo sh -c "echo %s > /sys/block/\'{}\'/queue/%s"' % (device, value, param))
 
 
     def __str__(self):
@@ -338,29 +344,29 @@ class Ceph(Cluster):
         target_max_bytes = profile.get('target_max_bytes', None)
 
 #        common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool delete %s %s --yes-i-really-really-mean-it' % (self.tmp_conf, name, name))
-        common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d %s' % (self.tmp_conf, name, pg_size, pgp_size, erasure_profile))
+        common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d %s' % (self.tmp_conf, name, pg_size, pgp_size, erasure_profile), True)
 
         if replication and replication == 'erasure':
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d erasure %s' % (self.tmp_conf, name, pg_size, pgp_size, erasure_profile))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d erasure %s' % (self.tmp_conf, name, pg_size, pgp_size, erasure_profile), True)
         else:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d' % (self.tmp_conf, name, pg_size, pgp_size))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool create %s %d %d' % (self.tmp_conf, name, pg_size, pgp_size), True)
 
         if replication and replication.isdigit():
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s size %s' % (self.tmp_conf, name, replication))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s size %s' % (self.tmp_conf, name, replication), True)
 
         if crush_profile:
             ruleset = self.get_ruleset(crush_profile)
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s crush_ruleset %s' % (self.tmp_conf, name, ruleset))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s crush_ruleset %s' % (self.tmp_conf, name, ruleset), True)
         if hit_set_type:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_type %s' % (self.tmp_conf, name, hit_set_type))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_type %s' % (self.tmp_conf, name, hit_set_type), True)
         if hit_set_count:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_count %s' % (self.tmp_conf, name, hit_set_count))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_count %s' % (self.tmp_conf, name, hit_set_count), True)
         if hit_set_period:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_period %s' % (self.tmp_conf, name, hit_set_period))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s hit_set_period %s' % (self.tmp_conf, name, hit_set_period), True)
         if target_max_objects:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s target_max_objects %s' % (self.tmp_conf, name, target_max_objects))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s target_max_objects %s' % (self.tmp_conf, name, target_max_objects), True)
         if target_max_bytes:
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s target_max_bytes %s' % (self.tmp_conf, name, target_max_bytes))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool set %s target_max_bytes %s' % (self.tmp_conf, name, target_max_bytes), True)
         print 'Checking Healh after pool creation.'
         self.check_health()
 
@@ -370,9 +376,9 @@ class Ceph(Cluster):
             cache_mode = cache.get('mode', 'writeback')
             cache_name = '%s-cache' % name
             self.mkpool(cache_name, cache_profile)
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier add %s %s' % (self.tmp_conf, name, cache_name))
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier cache-mode %s %s' % (self.tmp_conf, cache_name, cache_mode))
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier set-overlay %s %s' % (self.tmp_conf, name, cache_name))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier add %s %s' % (self.tmp_conf, name, cache_name), True)
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier cache-mode %s %s' % (self.tmp_conf, cache_name, cache_mode), True)
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier set-overlay %s %s' % (self.tmp_conf, name, cache_name), True)
 
     def rmpool(self, name, profile_name):
         pool_profiles = self.config.get('pool_profiles', {'default': {}})
@@ -383,19 +389,28 @@ class Ceph(Cluster):
             cache_name = '%s-cache' % name
 
             # flush and remove the overlay and such
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier cache-mode %s forward' % (self.tmp_conf, cache_name))
-            common.pdsh(settings.getnodes('head'), 'sudo rados -c %s -p %s cache-flush-evict-all' % (self.tmp_conf, cache_name))
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier remove-overlay %s' % (self.tmp_conf, name))
-            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier remove %s %s' % (self.tmp_conf, name, cache_name))
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier cache-mode %s forward' % (self.tmp_conf, cache_name), True)
+            common.pdsh(settings.getnodes('head'), 'sudo rados -c %s -p %s cache-flush-evict-all' % (self.tmp_conf, cache_name), True)
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier remove-overlay %s' % (self.tmp_conf, name), True)
+            common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd tier remove %s %s' % (self.tmp_conf, name, cache_name), True)
 
             # delete the cache pool
             self.rmpool(cache_name, cache_profile)
-        common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool delete %s %s --yes-i-really-really-mean-it' % (self.tmp_conf, name, name))
+        common.pdsh(settings.getnodes('head'), 'sudo ceph -c %s osd pool delete %s %s --yes-i-really-really-mean-it' % (self.tmp_conf, name, name),True)
 
+    def checkpool(self, name):
+        stdout, stderr = common.pdsh(settings.getnodes('head'), "sudo ceph -c %s osd lspools" % (self.tmp_conf), True)
+        pools = re.findall(r'\d (\S*),', stdout)
+        if name in pools:
+            return True
+        else:
+            print pools
+            return False
+    
     def rbd_unmount(self):
         common.pdsh(settings.getnodes('clients'), 'sudo find /dev/rbd* -maxdepth 0 -type b -exec umount \'{}\' \;',True)
 #        common.pdsh(settings.getnodes('clients'), 'sudo find /dev/rbd* -maxdepth 0 -type b -exec rbd -c %s unmap \'{}\' \;' % self.tmp_conf)
-        common.pdsh(settings.getnodes('clients'), 'sudo service rbdmap stop')
+        common.pdsh(settings.getnodes('clients'), 'sudo service rbdmap stop', True)
 class RecoveryTestThread(threading.Thread):
     def __init__(self, config, cluster, callback):
         threading.Thread.__init__(self)

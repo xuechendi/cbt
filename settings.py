@@ -49,7 +49,6 @@ def getnodes(*nodelists):
             cur = cur.keys()
         if cur:
             nodes = nodes + cur
-    print nodes
     return ','.join(uniquenodes(nodes))
 
 def uniquenodes(nodes):
@@ -61,7 +60,6 @@ def uniquenodes(nodes):
                 node = '%s@%s' % (user, node)
             if not node in ret:
                 ret.append(node)
-    print ret
     return ret
  
 def shutdown(message):

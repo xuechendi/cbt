@@ -2,7 +2,7 @@ import subprocess
 import common
 import settings
 import monitoring
-import os
+import os, sys
 import time
 import threading
 import lxml.etree as ET
@@ -100,15 +100,25 @@ class Cosbench(Benchmark):
                 self.add_leaf_to_tree(leaf_content, ET.SubElement(parent, leaf))
 
     def run(self):
-        super(Cosbench, self).run()
-        
+        #super(Cosbench, self).run()
         # Run write test
-        self._run('write', '%s/write' % self.run_dir, '%s/write' % self.out_dir)
+        try:
+            self._run()
+        except KeyboardInterrupt:
+            print "[WARNING] accept keyboard interrupt, cancel this run"
+            conf = self.config
+            res = common.pdsh(conf["controller"],'sh %s/cli.sh cancel %s' % (conf["cosbench_dir"], self.runid), True)
+            print "[LOG]%s" % res[0]
 
     def _run(self):
         conf = self.config
         res = common.pdsh(conf["controller"],'sh %s/cli.sh submit %s/%s.xml' % (conf["cosbench_dir"], conf["cosbench_xml_dir"], conf["xml_name"]), True) 
-        print res[0]
+        m = re.findall('Accepted with ID:\s*(\w+)', res[0] )
+        if not m:
+            print "[ERROR] cosbench start failing with error: %s" % res[1]
+            sys.exit()
+        self.runid = m[0]
+        print "[LOG] cosbench job start, job number %s" % self.runid
         wait_time = conf["rampup"]+conf["rampdown"]+conf["runtime"] 
         print "====== cosbench job: %s started ======" % (conf["xml_name"])
         print "wait %d secs to finish the test" % (wait_time)

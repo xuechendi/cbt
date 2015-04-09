@@ -15,13 +15,13 @@ class LibrbdFio(Benchmark):
         super(LibrbdFio, self).__init__(cluster, config)
 
         # FIXME there are too many permutations, need to put results in SQLITE3 
-        self.cmd_path = config.get('cmd_path', '/usr/bin/fio')
+        self.cmd_path = config.get('cmd_path', '/usr/local/bin/fio')
         self.pool_profile = config.get('pool_profile', 'default')
 
         self.concurrent_procs = config.get('concurrent_procs', 1)
         self.total_procs = self.concurrent_procs * len(settings.getnodes('clients').split(','))
-        self.time =  str(config.get('time', None))
-        self.ramp = str(config.get('ramp', None))
+        self.time =  str(config.get('time', 100))
+        self.ramp = str(config.get('ramp', 30))
         self.iodepth = config.get('iodepth', 16)
         self.numjobs = config.get('numjobs', 1)
         self.end_fsync = str(config.get('end_fsync', 0))
@@ -32,7 +32,7 @@ class LibrbdFio(Benchmark):
 #        self.ioengine = config.get('ioengine', 'libaio')
         self.op_size = config.get('op_size', 4194304)
         self.pgs = config.get('pgs', 2048)
-        self.vol_size = config.get('vol_size', 65536)
+        self.vol_size = config.get('vol_size', 10240)
         self.vol_order = config.get('vol_order', 22)
         self.random_distribution = config.get('random_distribution', None)
         self.poolname = "cbt-librbdfio"
@@ -55,18 +55,18 @@ class LibrbdFio(Benchmark):
         super(LibrbdFio, self).initialize()
 
         print 'Running scrub monitoring.'
-        monitoring.start("%s/scrub_monitoring" % self.run_dir)
+        monitoring.start("%s/scrub_monitoring" % self.run_dir, self.cluster)
         self.cluster.check_scrub()
         monitoring.stop()
 
         print 'Pausing for 60s for idle monitoring.'
-        monitoring.start("%s/idle_monitoring" % self.run_dir)
+        monitoring.start("%s/idle_monitoring" % self.run_dir, self.cluster)
         time.sleep(60)
         monitoring.stop()
 
-        common.sync_files('%s/*' % self.run_dir, self.out_dir)
+        common.sync_files('%s' % self.run_dir, self.out_dir)
 
-        self.mkimages()
+        #self.mkimages()
 
         # Create the run directory
         common.make_remote_dir(self.run_dir)
@@ -74,7 +74,7 @@ class LibrbdFio(Benchmark):
         # populate the fio files
         print 'Attempting to populating fio files...'
         pre_cmd = 'sudo %s --ioengine=rbd --clientname=admin --pool=%s --rbdname=cbt-librbdfio-`hostname -s` --invalidate=0  --rw=write --numjobs=%s --bs=4M --size %dM %s > /dev/null' % (self.cmd_path, self.poolname, self.numjobs, self.vol_size, self.names)
-        common.pdsh(settings.getnodes('clients'), pre_cmd)
+        #common.pdsh(settings.getnodes('clients'), pre_cmd)
 
         return True
 
@@ -87,7 +87,7 @@ class LibrbdFio(Benchmark):
         # dump the cluster config
         self.cluster.dump_config(self.run_dir)
 
-        monitoring.start(self.run_dir)
+        monitoring.start(self.run_dir, self.cluster)
 
         time.sleep(5)
         out_file = '%s/output' % self.run_dir
@@ -138,8 +138,9 @@ class LibrbdFio(Benchmark):
         common.sync_files('%s/*' % self.run_dir, self.out_dir)
 
     def mkimages(self):
-        monitoring.start("%s/pool_monitoring" % self.run_dir)
-        self.cluster.rmpool(self.poolname, self.pool_profile)
+        monitoring.start("%s/pool_monitoring" % self.run_dir, self.cluster)
+        if self.cluster.checkpool(self.poolname):
+            self.cluster.rmpool(self.poolname, self.pool_profile)
         self.cluster.mkpool(self.poolname, self.pool_profile)
         for node in settings.getnodes('clients').split(','):
             node = node.rpartition("@")[2]

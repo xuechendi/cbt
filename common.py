@@ -7,7 +7,7 @@ import sys
 
 def pdsh(nodes, command, force=False):
     args = ['pdsh', '-R', 'ssh', '-w', nodes, command]
-    print('pdsh: %s' % args)
+#    print('pdsh: %s' % args)
     stdout, stderr = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
     if force:
         return [stdout, stderr]
