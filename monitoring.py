@@ -55,7 +55,7 @@ def make_movies(directory):
     blktrace_dir = '%s/blktrace' % directory
     nodes = settings.getnodes('osds')
 
-    print "start seekwatcher on %s" % str(nodes)
+    print "start seekwatcher on %s:%s" % (str(nodes), blktrace_dir)
     for device in xrange (0,sc.get('osds_per_node')):
-        common.pdsh(nodes, 'cd %s;%s -t device%s -o device%s.mpg --movie' % (blktrace_dir,seekwatcher,device,device))
+        common.pdsh(nodes, 'cd %s;%s -t device%s -o device%s.mpg --movie > device%s.seekwatcher.log &' % (blktrace_dir, seekwatcher, device, device, device), True)
 

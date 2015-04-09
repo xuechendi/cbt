@@ -265,7 +265,8 @@ class Ceph(Cluster):
 
     def dump_historic_ops(self, run_dir):
         print "Dump config to %s/historic_ops.out" % run_dir
-        common.pdsh(settings.getnodes('osds'), 'find /var/run/ceph/*.asok -maxdepth 1 -exec sudo ceph --admin-daemon {} dump_historic_ops \; > %s/historic_ops.out' % run_dir)
+        #common.pdsh(settings.getnodes('osds'), 'find /var/run/ceph/*.asok -maxdepth 1 -exec sudo ceph --admin-daemon {} dump_historic_ops \; > %s/historic_ops.out' % run_dir)
+        common.pdsh(settings.getnodes('osds'), 'ls /var/run/ceph/*.asok | while read file; do sudo ceph --admin-daemon $file dump_historic_ops  > %s/historic_ops.out & done' % run_dir)
 
     def set_osd_param(self, param, value):
         sc = settings.cluster

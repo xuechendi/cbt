@@ -27,17 +27,27 @@ def rpdcp(nodes, flags, remotefile, localfile):
     if flags:
         args = ['rpdcp', '-f', '1', '-R', 'ssh', '-w', nodes, flags, remotefile, localfile]
     print('rpdcp: %s'  % args)
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
+    stdout, stderr = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
 
 def scp(node, localfile, remotefile):
     args = ['scp', localfile, '%s:%s' % (node, remotefile)]
     print('scp: %s' % args)
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
+    stdout, stderr = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
+    if force:
+        return [stdout, stderr]
+    if stderr:
+        print "[ERROR]:"+stderr+"\n"
+        sys.exit()
 
 def rscp(node, remotefile, localfile):
     args = ['scp', '%s:%s' % (node, remotefile), localfile]
     print('rscp: %s' % args)
-    return subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
+    stdout, stderr = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True).communicate()
+    if force:
+        return [stdout, stderr]
+    if stderr:
+        print "[ERROR]:"+stderr+"\n"
+        sys.exit()
 
 def make_remote_dir(remote_dir):
     print 'Making remote directory: %s' % remote_dir
